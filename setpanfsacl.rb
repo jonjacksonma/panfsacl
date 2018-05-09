@@ -4,56 +4,82 @@
 require 'find'
 
 require 'getoptlong'
-USAGE_TEXT='
-$0 [-bkndRLPvh] [{-m|-x} acl_spec] file ...
+USAGE_TEXT="
+#{File.basename($0)} [-bkndRLPvh] [{-m|-x} acl_spec] file ...
   
-    DESCRIPTION
+DESCRIPTION
 
-    This  utility  sets  Panasas Access  Control  Lists  (ACLs)  of files and directories.  On the command line, a sequence of commands is followed by a
-    sequence of files
+  This  utility  sets  Panasas Access  Control  Lists  (ACLs)  of files and directories.  On the command line, a sequence of commands is followed by a
+  sequence of files
 
-    Only additional access controls beyond the base entries for the owner, the group, and others are modifable by this tool. Use chmod/chown/chgrp to change those.
+  Only additional access controls beyond the base entries for the owner, the group, and others are modifiable by this tool. Use chmod/chown/chgrp to change those.
 
-    The options -m, and -x expect an ACL on the command line. The ACL entry format is described in Section ACL ENTRIES.
+  The options -m, and -x expect an ACL on the command line. The ACL entry format is described in Section ACL ENTRIES.
 
-    The -m (--modify) option modifies the ACL of a file or directory.  ACL entries for this operation must include permissions.
+  The  --set option sets the ACL of a file or a directory. The previous ACL is replaced.  ACL entries for this operation must include permissions.
 
-    The  -x  (--remove) option removes ACL entries. It is not an error to remove an entry which does not exist.  Only ACL entries without the perms field are accepted as parameters.
+  The -m (--modify) option modifies the ACL of a file or directory.  ACL entries for this operation must include permissions.
 
-    MAIN OPTIONS
-      -b, --remove-all
-           Remove all extended ACL entries. The base ACL entries of the owner,  group  and  others  are retained.
+  The  -x  (--remove) option removes ACL entries. It is not an error to remove an entry which does not exist.  Only ACL entries without the perms field are accepted as parameters.
 
-      -i, --inherit
-           ACLs set on directories using -m and -s will be inherited by future files created 
+MAIN OPTIONS
+  -b, --remove-all
+       Remove all extended ACL entries. The base ACL entries of the owner,  group  and  others  are retained.
 
-    ADDITIONAL OPTIONS
+  -i, --inherit
+       ACLs set on directories using -m and -s will be inherited by future files created 
 
-      -h, --help:
-         show help
+ADDITIONAL OPTIONS
 
-      -d, --debug:
-         debug mode
-      
-      -v, --verbose:
-         print changes
+  -h, --help:
+     show help
+
+  -d, --debug:
+     debug mode
+  
+  -v, --verbose:
+     print changes
      
-  ACL ENTRIES
-       The setfacl utility recognizes the following ACL entry formats (blanks inserted for clarity):
+ACL ENTRIES
+  The setfacl utility recognizes the following ACL entry formats (blanks inserted for clarity):
+  
+  [+-][u[ser]:]uid[:perms]
+    Permissions of a named user. Permissions of the file owner if uid is empty.
+  
+  [+-]g[roup]:gid[:perms]
+    Permissions of a named group. Permissions of the owning group if gid is empty.
+  
+  The first symbol may be '+', indicating 'allow' or '-' indicating 'deny'. Defaults to '+'. All 'deny' ACLs take precedence over any 'allow' ACLs.
+  
+  For uid and gid you can specify either a name or a number.
+  
+  The  perms  field  is a combination of characters that indicate the permissions: read (r), write (w), execute only if the file is a directory or already has execute permission for some user (X).
 
-       [+-][u[ser]:]uid[:perms]
-              Permissions of a named user. Permissions of the file owner if uid is empty.
+EXAMPLES
+  # Set only execute permission on a directory to allow user 'abc123' to traverse directory 'directory_name' but not read it
 
-       [+-]g[roup]:gid[:perms]
-              Permissions of a named group. Permissions of the owning group if gid is empty.
+    #{File.basename($0)} -m +user:abc123:X directory_name
 
-       The first symbol may be "+", indicating "allow" or "-" indicating "deny". Defaults to "+". All "deny" ACLs take precendence over any "allow" ACLs.
+  # Set read-only permission for groupABC recursively to directory_name and all files in it and existing sub-directories. Files created at a later time would not have the ACL set
 
-       For uid and gid you can specify either a name or a number.
+    #{File.basename($0)} -R -m +group:groupABC:r directory_name
+  
+  # Give user 'abc456' permission to read, write and execute file 'script_name' (requires script_name to already have execute permission set for the file owner)
 
-       The  perms  field  is a combination of characters that indicate the permissions: read (r), write (w), execute only if the file is a directory or already has execute permission for some user (X).
+    #{File.basename($0)} -m +u:abc456:rwX script_name
 
-'
+  # Give group 'groupCDE' permission to read and write to directory 'directory_name' and cause all new files or directories created under 'directory_name' to inherit this permission
+
+    #{File.basename($0)} -i -m +g:groupCDE:rw directory_name
+
+  # Deny permission to user 'xyz789' to read or write file 'data_file'
+
+    #{File.basename($0)} -m -u:xyz789:rw data_file
+
+NOTES
+
+  Always test that the ACLs perform as expected
+"
 opts = GetoptLong.new(
   [ '--debug', '-d', GetoptLong::NO_ARGUMENT],
   [ '--help', '-h', GetoptLong::NO_ARGUMENT ],
@@ -109,6 +135,7 @@ opts.each do |opt, arg|
     @verbose=true
   when '--help'
     puts USAGE_TEXT
+    exit(0)
   when '--inherit'
     @inherit=true
     
@@ -171,6 +198,7 @@ modify_matches.each do |mtc|
   
   dir_acl  = base_acl
   dir_acl += DIR_READ if mtc[4].match(/[rxX]/)
+  dir_acl += DIR_WRITE if mtc[4].include?('w')
   
   base_acl += EXEC if mtc[4].include?('x')
   
@@ -216,7 +244,7 @@ def modify_acl(path)
           aclarr.push(aclhash[:diracl])
         end
       else 
-        puts "skipping #{tfype} #{path}" if @verbose or @debug
+        puts "Ignoring #{tfype} at '#{path}'" if @verbose or @debug
       end
 
     end
@@ -241,3 +269,4 @@ ARGV.each do |target|
     modify_acl(target)
   end
 end
+      
