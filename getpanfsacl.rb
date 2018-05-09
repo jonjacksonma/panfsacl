@@ -5,17 +5,18 @@
 require 'find'
 require 'set'
 require 'getoptlong'
-USAGE_TEXT='
-$0 [-R] file ...
+USAGE_TEXT="
+#{File.basename($0)} [-R] file ...
 
 DESCRIPTION
 
-This utility displays the active Panasas Access Control Lists (ACLs) of files and directories.  
+This utility displays the active Panasas Access Control Lists (ACLs) on files and directories.  
+
 OPTIONS
 -R, --recursive
     List the ACLs of all files and directories recursively.
 
-'
+"
 
 FILE_READ='rnkRP'
 FILE_READ_FULL=Set.new(FILE_READ.split(''))
@@ -77,6 +78,7 @@ opts.each do |opt, arg|
     @verbose=true
   when '--help'
     puts USAGE_TEXT  
+    exit(0)
   when '--recursive'
     @recursive=true    
   end
@@ -105,57 +107,73 @@ end
 def print_acl (path)
   # Use linux tool as-is to display User/group/other permissions and ownership
   # If file is not a PanFS file, then getfacl will display any Posix acls...
-  
-  standard_perms=%x(/usr/bin/getfacl "#{path}" 2>/dev/null)
-  puts standard_perms
-  curr_acl=%x(/usr/bin/getfattr --only-values -n user.panfs.acl "#{path}" 2>/dev/null)
   ftype=File.ftype(path)
-  if $? == 0
-    puts curr_acl if @verbose or @debug
-    aclarr=curr_acl.split(" ").drop(1)
-    aclarr.map{ |acl| 
-      acl.match(/^([+-])(uid|gid):([[:alnum:]]+),([rwxacdkposCnNDRWPShH]+)(,I:[OICNPD]*)?(?!\*)$/ ) 
-    }.compact.sort_by{ |mtc| 
-      # list deny acls first, and user acls before group acls
-      [mtc[1] == '-' ? 0 : 1, mtc[2] == 'uid' ? 0 : 1]
-    }.each do |mtc|
-      if mtc[2] == 'uid' 
-        type = 'passwd'
-        ptype = 'user'
-      else
-        type = 'group'
-        ptype = 'group'    
-      end
-      next if mtc[3] == "0"
-      identifier = get_tid(type,mtc[3])
-      aclcomponents = Set.new(mtc[4].to_s.split(''))
-      perms=''
-      partial=false
-      missing=Set.new()
-      ['r','w'].each do |p| 
-        target_length=@permsinfo[ftype][p]['count']
-        target_aclcomps=@permsinfo[ftype][p]['aclcomps']
-          
-        comparison=( aclcomponents & target_aclcomps ).count
-        if comparison == target_length
-          perms+=p
-        elsif target_length > 1 && comparison > 1
-          # File has some directory read permissions but not all
-          perms+=p
-          partial=true
-          missing+=target_aclcomps - ( aclcomponents & target_aclcomps )
-        end
-
-      end
-      if aclcomponents.include?(EXEC)
-        perms += 'x'
-      end
-      puts ptype + ":" + identifier + ':' + perms + ( partial ? ' (PARTIAL; missing ' + missing.to_a.join('') + ')' : '' )
-      
-    end
+  if ['file','directory'].include?(ftype)
+    standard_perms=%x(/usr/bin/getfacl "#{path}" 2>/dev/null)
+    puts "# #{ftype} permissions:"
+    puts standard_perms
+    curr_acl=%x(/usr/bin/getfattr --only-values -n user.panfs.acl "#{path}" 2>/dev/null)
     
+    if $? == 0
+      puts curr_acl if @verbose or @debug
+      puts "# PanFS ACLs:"
+      aclarr=curr_acl.split(" ").drop(1)
+      aclarr.map{ |acl| 
+        acl.match(/^([+-~])(uid|gid):([[:alnum:]]+),([rwxacdkposCnNDRWPShH]+)(,I:[OICNPD]*)?(?!\*)$/ ) 
+      }.compact.sort_by{ |mtc| 
+        # list deny acls first, and user acls before group acls
+        [mtc[1] != '+' ? 0 : 1, mtc[2] == 'uid' ? 0 : 1]
+      }.each do |mtc|
+        sense = mtc[1] == '+' ? 'allow: +' : ' deny: -' 
+        if mtc[2] == 'uid' 
+          type = 'passwd'
+          ptype = 'user'
+        else
+          type = 'group'
+          ptype = 'group'    
+        end
+        next if mtc[3] == "0"
+        identifier = get_tid(type,mtc[3])
+        aclcomponents = Set.new(mtc[4].to_s.split(''))
+        perms=''
+        partial=false
+        missing=Set.new()
+        ['r','w'].each do |p| 
+          target_length=@permsinfo[ftype][p]['count']
+          target_aclcomps=@permsinfo[ftype][p]['aclcomps']
+            
+          comparison=( aclcomponents & target_aclcomps ).count
+          if comparison == target_length
+            perms+=p
+          elsif target_length > 1 && comparison > 1
+            # File has some directory read permissions but not all
+            perms+=p
+            partial=true
+            missing+=target_aclcomps - ( aclcomponents & target_aclcomps )
+          end
+  
+        end
+        if aclcomponents.include?(EXEC)
+          perms += 'x'
+        end
+        inheritance_str=' '
+        if ftype == 'directory' && ! mtc[5].nil?
+          imtc = mtc[5].match(/^,I:(OI)?(CI)?[IONPID]*/)
+          puts mtc[5] + ' ' + imtc.inspect if @debug
+          if ! imtc.nil?
+            inheritance_str = " inherited_to: #{[imtc[1].nil? ? nil : 'files' , imtc[2].nil? ? nil : 'directories'].join(' ')} "
+          end
+        end
+        partial_str = partial ? ' (PARTIAL; missing ' + missing.to_a.join('') + ')' : ''
+        puts sense + ':' + ptype + ":" + identifier + ':' + perms + inheritance_str + partial_str 
+        
+      end
+      
+    else
+      STDERR.puts "Failure getting ACL for #{path}"
+    end
   else
-    STDERR.puts "Failure getting ACL for #{path}"
+    STDERR.puts "Ignoring #{ftype} at '#{path}'" if @verbose or @debug
   end
 end
 
