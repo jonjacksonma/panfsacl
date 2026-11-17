@@ -2,6 +2,7 @@
 # Project URL: https://github.com/jonjacksonma/panfsacl
 
 require 'find'
+require 'open3'
 
 require 'getoptlong'
 USAGE_TEXT="
@@ -114,8 +115,8 @@ def get_nid (type,identifier)
     return identifier
   else
     puts "/usr/bin/getent #{type} #{identifier}" if @debug
-    getent_line = %x( /usr/bin/getent #{type} #{identifier} )
-    if $? != 0 then
+    getent_line, getent_status = Open3.capture2('/usr/bin/getent', type, identifier)
+    if !getent_status.success? then
       puts "Problem looking up numeric id for #{identifier}. Got #{getent_line}"
       exit(1)
     else
@@ -140,7 +141,7 @@ opts.each do |opt, arg|
     @inherit=true
     
   when '--modify'
-    mtc = arg.match(/^([+-]?)(g|group|u|user):([[:alnum:]]+):([rwX]+)$/)
+    mtc = arg.match(/^([+-]?)(g|group|u|user):([[:alnum:]][[:alnum:]._-]*):([rwX]+)$/)
     if mtc.nil? 
       STDERR.puts "#{arg} is not a valid ACL, (try --help)"
       exit(1)
@@ -216,8 +217,8 @@ end
 def modify_acl(path)
   puts "PATH: #{path}" if @debug
   write=false
-  curr_acl=%x(/usr/bin/getfattr --only-values -n user.panfs.acl "#{path}" 2>/dev/null)
-  if $? == 0
+  curr_acl, _getfattr_err, getfattr_status = Open3.capture3('/usr/bin/getfattr', '--only-values', '-n', 'user.panfs.acl', path)
+  if getfattr_status.success?
     puts curr_acl if @debug
     aclarr=curr_acl.split(" ")
     @remove_acls.each do | acl |
@@ -244,14 +245,17 @@ def modify_acl(path)
           aclarr.push(aclhash[:diracl])
         end
       else 
-        puts "Ignoring #{tfype} at '#{path}'" if @verbose or @debug
+        puts "Ignoring #{ftype} at '#{path}'" if @verbose or @debug
       end
 
     end
 
     if write
-      puts "/usr/bin/setfattr -n user.panfs.acl -v '#{aclarr.join(' ')}' #{path}" if @verbose or @debug
-      %x(/usr/bin/setfattr -n user.panfs.acl -v '#{aclarr.join(' ')}' #{path})
+      new_acl = aclarr.join(' ')
+      puts "/usr/bin/setfattr -n user.panfs.acl -v '#{new_acl}' '#{path}'" if @verbose or @debug
+      if !system('/usr/bin/setfattr', '-n', 'user.panfs.acl', '-v', new_acl, path)
+        STDERR.puts "Failure setting ACL for #{path}"
+      end
     else
       puts "no change required" if @debug
     end
